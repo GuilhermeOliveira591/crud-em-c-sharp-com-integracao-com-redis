@@ -12,6 +12,7 @@ using System.Data.SqlTypes;
 using System.Diagnostics.Metrics;
 using System.Collections;
 using System.Reflection;
+using DotNetEnv;
 
 namespace CacheApplicationConsole
 {
@@ -20,14 +21,37 @@ namespace CacheApplicationConsole
         static void Main(string[] args)
         {
 
-            string sqlConnectionString = @"Data Source=NOTECOMP-0876\SQLSERVER;Initial Catalog=APPLICATION_CRUD;Integrated Security=True";
-            string redisConnectionString = "localhost:6379,allowAdmin=true,password=123456";
+            string sqlConnectionString = Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING");
+            string redisConnectionString = Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING");
             ConnectionMultiplexer redis = ConnectionMultiplexer.Connect(redisConnectionString);
             IDatabase redisDatabase = redis.GetDatabase();
-            
+
+
+            static async Task<bool> IsPersonActiveAsync (string sqlConnectionString, int id)
+            {
+                const string query = @"
+                    SELECT
+                     CASE
+                       WHEN EXISTS(SELECT 1 FROM Pessoa WHERE Id = @Id AND Ativo = 1) THEN 1
+                       ELSE 0
+                     END AS IsPessoaAtiva;
+                ";
+
+                using var connection = new SqlConnection(sqlConnectionString);
+
+                await connection.OpenAsync();
+
+                int result = await connection.QueryFirstOrDefaultAsync<int>(query, new { Id=id });
+
+                connection.Close();
+
+                return result == 1;
+            }
 
             static async Task ConsultarPessoaPorIdEAdicionarAoRedis(string sqlConnectionString, string redisConnectionString, int id, IDatabase redisDatabase)
             {
+                
+                
                 using (var sqlDatabase = new SqlConnection(sqlConnectionString))
                 {
                     await sqlDatabase.OpenAsync();
