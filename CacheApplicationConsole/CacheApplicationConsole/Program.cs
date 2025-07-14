@@ -48,87 +48,87 @@ namespace CacheApplicationConsole
                 return result == 1;
             }
 
-            static async Task ConsultarPessoaPorIdEAdicionarAoRedis(string sqlConnectionString, string redisConnectionString, int id, IDatabase redisDatabase)
+            static async Task<bool> IsCpfActiveAsync(string sqlConnectionString, string cpf)
             {
-                
-                
-                using (var sqlDatabase = new SqlConnection(sqlConnectionString))
+                const string query = @"
+                    SELECT
+                     CASE
+                       WHEN EXISTS(SELECT 1 FROM Pessoa WHERE CPF = @CPF AND Ativo = 1) THEN 1
+                       ELSE 0
+                     END AS IsPessoaAtiva;
+                ";
+
+                using var connection = new SqlConnection(sqlConnectionString);
+
+                await connection.OpenAsync();
+
+                int result = await connection.QueryFirstOrDefaultAsync<int>(query, new { CPF = cpf });
+
+                connection.Close();
+
+                return result == 1;
+
+            }
+
+            static async Task InsertRecordToRedis(string sqlConnectionString, int id, IDatabase redisDatabase)
+            {
+                bool isPersonActive = await IsPersonActiveAsync(sqlConnectionString, id);
+
+                if (!isPersonActive)
                 {
-                    await sqlDatabase.OpenAsync();
-                    var query = $"SELECT * FROM Pessoa WHERE Id = {id} AND Ativo = 1";
-                    var pessoa = await sqlDatabase.QueryFirstOrDefaultAsync<Pessoa>(query);
+                    Pessoa pessoa = new Pessoa();
 
-                    if (pessoa != null)
+                    var jsonObject = new
                     {
+                        Id = pessoa.Id,
+                        NomeCompleto = pessoa.NomeCompleto,
+                        Genero = pessoa.Genero,
+                        CPF = pessoa.CPF,
+                        EnderecoCompleto = pessoa.EnderecoCompleto
+                    };
 
-                        var jsonObject = new
-                        {
-                            Id = pessoa.Id,
-                            NomeCompleto = pessoa.NomeCompleto,
-                            Genero = pessoa.Genero,
-                            CPF = pessoa.CPF,
-                            EnderecoCompleto = pessoa.EnderecoCompleto
-                        };
+                    string jsonValue = JsonConvert.SerializeObject(jsonObject);
 
-                        string jsonValue = JsonConvert.SerializeObject(jsonObject);
-
-                        // Insert JSON data into Redis list
-                        string redisListKey = $"PessoaList";
-                        redisDatabase.ListRightPush(redisListKey, jsonValue);
-                    }
-                    else
-                    {
-
-                    }
+                    // Insert JSON data into Redis list
+                    string redisListKey = $"PessoaList";
+                    redisDatabase.ListRightPush(redisListKey, jsonValue);
+                }
+                else
+                {
 
                 }
             }
 
-            static int ProcurarPessoaParaObterId(string sqlConnectionString, string cpf, string nomeCompleto)
+            static async Task<int> GetPersonId(string sqlConnectionString, string cpf)
             {
-                using (var sqlDatabase = new SqlConnection(sqlConnectionString))
+                const string query = @"
+                    SELECT 
+                        Id 
+                    FROM Pessoa
+                    WHERE CPF = @CPF;
+                ";
+
+                using var connection = new SqlConnection(sqlConnectionString);
+
+                await connection.OpenAsync();
+
+                var pessoa = connection.QueryFirstOrDefault<Pessoa>(query, new { CPF = cpf });
+
+                if (pessoa.Id != 0 || pessoa.Id != null)
                 {
-                    sqlDatabase.Open();
-
-                    // Usando parâmetros para evitar injeção de SQL
-                    var query =  $"SELECT * FROM Pessoa WHERE CPF = @CPF AND NomeCompleto = @NomeCompleto";
-                    var pessoa = sqlDatabase.QueryFirstOrDefault<Pessoa>(query, new { CPF = cpf, NomeCompleto = nomeCompleto});
-
-                    if (pessoa.Id != 0 || pessoa.Id != null)
-                    {
-                        return pessoa.Id;
-                    }
-
-                    else
-                    {
-                        Console.WriteLine("Nada a ser exibido");
-                        return 0; // Ou outro valor padrão, dependendo do seu contexto
-                    }
+                    return pessoa.Id;
                 }
+
+                else
+                {
+                    Console.WriteLine("Nada a ser exibido");
+                    return 0; // Ou outro valor padrão, dependendo do seu contexto
+                }
+
             }
 
-            static string ValidarCpfExistente(string sqlConnectionString, string cpf)
-            {
-                using (var sqlDatabase = new SqlConnection(sqlConnectionString))
-                {
-                    sqlDatabase.Open();
 
-                    // Usando parâmetros para evitar injeção de SQL
-                    var query = $"SELECT CPF FROM Pessoa WHERE CPF = @CPF AND Ativo = 1";
-                    var pessoa = sqlDatabase.QueryFirstOrDefault<Pessoa>(query, new { CPF = cpf});
-
-                    if (pessoa == null)
-                    {
-                        return cpf;
-                    }
-                    else
-                    {
-                        return "";
-                    }
-                }
-            }
-
-            static int ObterNumeroPagina(IDatabase redisDatabase, string listaKey, string campoOrdenacao, int valorBuscado, int pageSize)
+            static int GetRedisPageNumber(IDatabase redisDatabase, string listaKey, string campoOrdenacao, int valorBuscado, int pageSize)
             {
                 RedisValue[] rangeList = redisDatabase.ListRange(listaKey, 0, -1);
 
@@ -187,9 +187,9 @@ namespace CacheApplicationConsole
 
                 Console.WriteLine("CPF sem traços e pontos: ");
                 string CPF = Console.ReadLine();
-                string verificadorCpf = ValidarCpfExistente(sqlConnectionString, CPF);
+                bool verificadorCpf = await IsCpfActiveAsync(sqlConnectionString, CPF);
 
-                if(!string.IsNullOrWhiteSpace(verificadorCpf))
+                if(verificadorCpf == false)
                 {
                     Console.WriteLine("Endereço Completo: ");
                     string enderecoCompleto = Console.ReadLine();
@@ -207,8 +207,8 @@ namespace CacheApplicationConsole
                     insertCommand.ExecuteNonQuery();
                     Console.WriteLine("Dados Inseridos \n");
 
-                    int id = ProcurarPessoaParaObterId(sqlConnectionString, CPF, nomeCompleto);
-                    await ConsultarPessoaPorIdEAdicionarAoRedis(sqlConnectionString, redisConnectionString, id, redisDatabase);
+                    int id = await GetPersonId(sqlConnectionString, CPF);
+                    await InsertRecordToRedis(sqlConnectionString, id, redisDatabase);
                 }
                 else
                 {
@@ -287,7 +287,7 @@ namespace CacheApplicationConsole
                     Console.WriteLine("Valor Atualizado com Sucesso! \n");
 
                     int paginationSize = 1000;
-                    int pageNumber = ObterNumeroPagina(redisDatabase, "PessoaList", "Id", id, paginationSize);
+                    int pageNumber = GetRedisPageNumber(redisDatabase, "PessoaList", "Id", id, paginationSize);
                     int startIndex = (pageNumber - 1) * paginationSize;
 
                     RedisValue[] rangeList = redisDatabase.ListRange("PessoaList", startIndex, (startIndex + paginationSize) - 1);
@@ -365,7 +365,7 @@ namespace CacheApplicationConsole
                     Console.WriteLine("\nRegistro excluído com sucesso! \n");
 
                     int paginationSize = 1000;
-                    int pageNumber = ObterNumeroPagina(redisDatabase, "PessoaList", "Id", id, paginationSize);
+                    int pageNumber = GetRedisPageNumber(redisDatabase, "PessoaList", "Id", id, paginationSize);
                     int startIndex = (pageNumber - 1) * paginationSize;
 
                     RedisValue[] rangeList = redisDatabase.ListRange("PessoaList", startIndex, (startIndex + paginationSize) - 1);
@@ -423,33 +423,32 @@ namespace CacheApplicationConsole
             {
                 string choice = ShowMenuAndGetChoice();
 
-                if (choice == "0")
+                switch (choice)
                 {
-                    Environment.Exit(0);
+                    case "0":
+                        Environment.Exit(0);
+                        break;
+                    case "1":
+                        ShowInsertMenu(sqlConnectionString, redisConnectionString, redisDatabase);
+                        break;
+                    case "2":
+                        ShowRedisData(redisConnectionString, redisDatabase);
+                        ShowUpdateMenu(sqlConnectionString, redisConnectionString, redisDatabase);
+                        break;
+                    case "3":
+                        ShowRedisData(redisConnectionString, redisDatabase);
+                        ShowDeleteMenu(sqlConnectionString, redisConnectionString, redisDatabase);
+                        break;
+                    case "4":
+                        ShowRedisData(redisConnectionString, redisDatabase);
+                        break;
+                    default:
+                        break;
+
                 }
-                else if (choice == "1")
-                {
-                    ShowInsertMenu(sqlConnectionString, redisConnectionString, redisDatabase);
-                }
-                else if (choice == "2")
-                {
-                    ShowRedisData(redisConnectionString, redisDatabase);
-                    ShowUpdateMenu(sqlConnectionString, redisConnectionString, redisDatabase);
-                }
-                else if (choice == "3")
-                {
-                    ShowRedisData(redisConnectionString, redisDatabase);
-                    ShowDeleteMenu(sqlConnectionString, redisConnectionString, redisDatabase);
-                }
-                else if (choice == "4")
-                {
-                    ShowRedisData(redisConnectionString, redisDatabase);
-                }
-                else
-                {
-                
-                }
+
             }
+
 
         }
     }
