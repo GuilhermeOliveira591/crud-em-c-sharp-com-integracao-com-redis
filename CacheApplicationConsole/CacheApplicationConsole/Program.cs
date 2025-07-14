@@ -171,7 +171,7 @@ namespace CacheApplicationConsole
                 return userChoice;
             }
 
-            static async Task ShowInsertMenu(string sqlConnectionString, string redisConnectionString, IDatabase redisDatabase)
+            static async Task ShowInsertMenu(string sqlConnectionString, IDatabase redisDatabase)
             {
 
                 SqlConnection sqlConnection;
@@ -218,13 +218,12 @@ namespace CacheApplicationConsole
                 sqlConnection.Close();
             }
 
-            static void ShowUpdateMenu(string sqlConnectionString, string redisConnectionString, IDatabase redisDatabase)
+            static void ShowUpdateMenu(string sqlConnectionString, IDatabase redisDatabase)
             {
 
                 SqlConnection sqlConnection;
                 sqlConnection = new SqlConnection(sqlConnectionString);
                 sqlConnection.Open();
-                ConnectionMultiplexer redis = ConnectionMultiplexer.Connect(redisConnectionString);
 
                 Console.WriteLine("Qual o Id a ser atualizado?: ");
                 int id;
@@ -336,13 +335,11 @@ namespace CacheApplicationConsole
                 }
             }
 
-            static void ShowDeleteMenu(string sqlConnectionString, string redisConnectionString, IDatabase redisDatabase)
+            static void ShowDeleteMenu(string sqlConnectionString, IDatabase redisDatabase)
             {
                 SqlConnection sqlConnection;
                 sqlConnection = new SqlConnection(sqlConnectionString);
                 sqlConnection.Open();
-
-                ConnectionMultiplexer redis = ConnectionMultiplexer.Connect(redisConnectionString);
 
                 Console.WriteLine("Qual o Id a ser deletado?: ");
                 int id;
@@ -392,9 +389,8 @@ namespace CacheApplicationConsole
                 sqlConnection.Close();
             }
 
-            static void ShowRedisData(string redisConnectionString, IDatabase redisDatabase)
+            static void ShowRedisData(IDatabase redisDatabase)
             {
-                ConnectionMultiplexer redis = ConnectionMultiplexer.Connect(redisConnectionString);
 
                 string listaKey = "PessoaList"; // Substitua pelo nome real da sua lista no Redis
 
@@ -429,18 +425,18 @@ namespace CacheApplicationConsole
                         Environment.Exit(0);
                         break;
                     case "1":
-                        ShowInsertMenu(sqlConnectionString, redisConnectionString, redisDatabase);
+                        ShowInsertMenu(sqlConnectionString, redisDatabase);
                         break;
                     case "2":
-                        ShowRedisData(redisConnectionString, redisDatabase);
-                        ShowUpdateMenu(sqlConnectionString, redisConnectionString, redisDatabase);
+                        ShowRedisData(redisDatabase);
+                        ShowUpdateMenu(sqlConnectionString, redisDatabase);
                         break;
                     case "3":
-                        ShowRedisData(redisConnectionString, redisDatabase);
-                        ShowDeleteMenu(sqlConnectionString, redisConnectionString, redisDatabase);
+                        ShowRedisData(redisDatabase);
+                        ShowDeleteMenu(sqlConnectionString, redisDatabase);
                         break;
                     case "4":
-                        ShowRedisData(redisConnectionString, redisDatabase);
+                        ShowRedisData(redisDatabase);
                         break;
                     default:
                         break;
