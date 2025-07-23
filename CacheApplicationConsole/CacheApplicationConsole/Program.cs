@@ -18,13 +18,22 @@ namespace CacheApplicationConsole
 {
     class Program
     {
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
+            var currentPath = AppDomain.CurrentDomain.BaseDirectory;
+            DotNetEnv.Env.Load(Path.Combine(currentPath, ".env"));
 
             string sqlConnectionString = Environment.GetEnvironmentVariable("SQL_CONNECTION_STRING");
             string redisConnectionString = Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING");
             ConnectionMultiplexer redis = ConnectionMultiplexer.Connect(redisConnectionString);
             IDatabase redisDatabase = redis.GetDatabase();
+
+            static async Task<SqlConnection> OpenSqlConnectionAsync(string sqlConnectionString)
+            {
+                var connection = new SqlConnection(sqlConnectionString);
+                await connection.OpenAsync();
+                return connection; 
+            }
 
 
             static async Task<bool> IsPersonActiveAsync (string sqlConnectionString, int id)
@@ -37,13 +46,11 @@ namespace CacheApplicationConsole
                      END AS IsPessoaAtiva;
                 ";
 
-                using var connection = new SqlConnection(sqlConnectionString);
-
-                await connection.OpenAsync();
+                using var connection = await OpenSqlConnectionAsync(sqlConnectionString);
 
                 int result = await connection.QueryFirstOrDefaultAsync<int>(query, new { Id=id });
 
-                connection.Close();
+                await connection.CloseAsync();
 
                 return result == 1;
             }
@@ -58,13 +65,11 @@ namespace CacheApplicationConsole
                      END AS IsPessoaAtiva;
                 ";
 
-                using var connection = new SqlConnection(sqlConnectionString);
-
-                await connection.OpenAsync();
+                using var connection = await OpenSqlConnectionAsync(sqlConnectionString);
 
                 int result = await connection.QueryFirstOrDefaultAsync<int>(query, new { CPF = cpf });
 
-                connection.Close();
+                await connection.CloseAsync();
 
                 return result == 1;
 
@@ -99,6 +104,27 @@ namespace CacheApplicationConsole
                 }
             }
 
+            static async Task InsertNewPersonAsync(string sqlConnectionString, string nomeCompleto, string genero, string CPF, string enderecoCompleto)
+            {
+                const string insertCommand = @"
+                    INSERT INTO Pessoa(nomeCompleto, genero, CPF, enderecoCompleto, Ativo) 
+                    VALUES(@NomeCompleto, @Genero, @CPF, @EnderecoCompleto, 1)
+                ";
+
+                using var connection = await OpenSqlConnectionAsync(sqlConnectionString);
+
+                await connection.ExecuteAsync(insertCommand, new
+                {
+                    NomeCompleto = nomeCompleto,
+                    Genero = genero,
+                    CPF = CPF,
+                    EnderecoCompleto = enderecoCompleto
+                });
+
+                await connection.CloseAsync();
+
+            }
+
             static async Task<int> GetPersonId(string sqlConnectionString, string cpf)
             {
                 const string query = @"
@@ -108,11 +134,11 @@ namespace CacheApplicationConsole
                     WHERE CPF = @CPF;
                 ";
 
-                using var connection = new SqlConnection(sqlConnectionString);
+                using var connection = await OpenSqlConnectionAsync(sqlConnectionString);
+                
+                var pessoa = connection.QueryFirstOrDefaultAsync<Pessoa>(query, new { CPF = cpf });
 
-                await connection.OpenAsync();
-
-                var pessoa = connection.QueryFirstOrDefault<Pessoa>(query, new { CPF = cpf });
+                await connection.CloseAsync();
 
                 if (pessoa.Id != 0 || pessoa.Id != null)
                 {
@@ -122,7 +148,7 @@ namespace CacheApplicationConsole
                 else
                 {
                     Console.WriteLine("Nada a ser exibido");
-                    return 0; // Ou outro valor padrão, dependendo do seu contexto
+                    return 0;
                 }
 
             }
@@ -174,11 +200,8 @@ namespace CacheApplicationConsole
             static async Task ShowInsertMenu(string sqlConnectionString, IDatabase redisDatabase)
             {
 
-                SqlConnection sqlConnection;
-                sqlConnection = new SqlConnection(sqlConnectionString);
-                sqlConnection.Open();
+                using var connection = await OpenSqlConnectionAsync(sqlConnectionString);
 
-                //Reading the data been inserted
                 Console.WriteLine("Nome Completo: ");
                 string nomeCompleto = Console.ReadLine();
 
@@ -187,24 +210,15 @@ namespace CacheApplicationConsole
 
                 Console.WriteLine("CPF sem traços e pontos: ");
                 string CPF = Console.ReadLine();
-                bool verificadorCpf = await IsCpfActiveAsync(sqlConnectionString, CPF);
 
-                if(verificadorCpf == false)
+                bool isCpfActive = await IsCpfActiveAsync(sqlConnectionString, CPF);
+
+                if(!isCpfActive)
                 {
                     Console.WriteLine("Endereço Completo: ");
                     string enderecoCompleto = Console.ReadLine();
 
-                    //Preparing the query
-                    string insertQuery = "INSERT INTO Pessoa(nomeCompleto, genero, CPF, enderecoCompleto, Ativo) VALUES (@NomeCompleto, @Genero, @CPF, @EnderecoCompleto, 1)";
-                    SqlCommand insertCommand = new SqlCommand(insertQuery, sqlConnection);
-
-                    //Adding variable parameters
-                    insertCommand.Parameters.AddWithValue("@NomeCompleto", nomeCompleto);
-                    insertCommand.Parameters.AddWithValue("@Genero", genero);
-                    insertCommand.Parameters.AddWithValue("@CPF", CPF);
-                    insertCommand.Parameters.AddWithValue("@EnderecoCompleto", enderecoCompleto);
-
-                    insertCommand.ExecuteNonQuery();
+                    await InsertNewPersonAsync(sqlConnectionString, nomeCompleto, genero, CPF, nomeCompleto);
                     Console.WriteLine("Dados Inseridos \n");
 
                     int id = await GetPersonId(sqlConnectionString, CPF);
@@ -215,7 +229,7 @@ namespace CacheApplicationConsole
                     Console.WriteLine("CPF já existente no Banco de Dados \n");
                 }                
 
-                sqlConnection.Close();
+                await connection.CloseAsync();
             }
 
             static void ShowUpdateMenu(string sqlConnectionString, IDatabase redisDatabase)
@@ -425,7 +439,7 @@ namespace CacheApplicationConsole
                         Environment.Exit(0);
                         break;
                     case "1":
-                        ShowInsertMenu(sqlConnectionString, redisDatabase);
+                        await ShowInsertMenu(sqlConnectionString, redisDatabase);
                         break;
                     case "2":
                         ShowRedisData(redisDatabase);
